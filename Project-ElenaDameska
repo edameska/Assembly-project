@@ -1,0 +1,410 @@
+;The a,w,s,d keys are used to navigate the cat in order to reach the mouse.
+;Every step, four tiles are formed; you may walk on them, but if they fall on you during 
+;that move, you will lose.
+
+JMP main:
+JMP isr
+
+;global system variables
+keypress:
+    DW 0
+vsync:
+    DW 0
+key:
+    DW 0
+    
+isr:
+    PUSH A		;store value of register A in the stack
+    IN 1
+    CMP A,4		;is it vvsync
+    JNE isr_keyboard 	;if it's not, it's keyboard
+    MOV [vsync],1
+    MOV A,4		;vsync interrupt number
+    OUT 2		;interrupt has been serviced
+    JMP isr_return
+isr_keyboard:
+    IN 5		;read key event status
+    AND A,1 		; mask keydown event
+    CMP A,1		;is it a keydown event
+    JNE isr_clear	;if it's not clear data
+    IN 6
+    MOVB [key],AL	;what key is pressed
+    MOV [keypress],1	;set flag
+    isr_clear:
+    MOV A,1		;keyboard interrupt number
+    OUT 2		;interrupt has been serviced
+    isr_return:
+    POP A 		;restore value
+    IRET  
+
+
+;global variables
+tiles: ;64x64 monochrome bitmaps
+;cat:
+;cat_body (white colour) xF0 char
+DB "\x00\x1C\x00\x37\x00\x30\x82\x10"
+DB "\xFE\x1E\xFE\x03\xBA\x01\xEE\xFB"
+DB "\x7F\xFE\x3F\xFF\x7F\xFF\x7E\x1F"
+DB "\x6C\x0F\x6C\x07\x2C\x07\x6C\x0F"
+
+;cat_ears:(pink) xF1 char
+DB "\x00\x00\x00\x00\x00\x00\x00\x00"
+DB "\x82\x00\x82\x00\x00\x00\x10\x00"
+DB "\x00\x00\x00\x00\x00\x00\x00\x00"
+DB "\x00\x00\x00\x00\x00\x00\x00\x00"
+
+;cat_eyes:(blue) xF2 char
+DB "\x00\x00\x00\x00\x00\x00\x00\x00"
+DB "\x00\x00\x00\x00\x44\x00\x00\x00"
+DB "\x00\x00\x00\x00\x00\x00\x00\x00"
+DB "\x00\x00\x00\x00\x00\x00\x00\x00"
+
+;barricade: xF3
+DB "\x0F\xF0\x1F\xF8\x3F\xFC\x7F\xFE"
+DB "\xFF\xFF\xFF\xFF\xFF\xFF\xFF\xFF"
+DB "\xFF\xFF\xFF\xFF\xFF\xFF\xFF\xFF"
+DB "\x7F\xFE\x3F\xFC\x1F\xF8\x0F\xF0"
+
+;mouse:
+;mouse_outline: xf4
+DB "\x00\x00\x00\x00\xC0\x00\x27\x1C"
+DB "\x28\xA2\x28\xE2\x49\x12\x86\x0C"
+DB "\x82\xA8\x9E\x48\xA1\x10\x40\xE0"
+DB "\x40\x20\x50\x20\x4E\xA0\x7B\x60"
+
+;mouse_ears: xf5
+DB "\x00\x00\x00\x00\x00\x00\x00\x00"
+DB "\x07\x1C\x07\x1C\x06\x0C\x00\x00"
+DB "\x00\x00\x00\x00\x00\x00\x00\x00"
+DB "\x00\x00\x00\x00\x00\x00\x00\x00"
+
+;mouse_fill: xf6
+DB "\x00\x00\x00\x00\x00\x00\x00\x00"
+DB "\x00\x00\x00\x00\x00\xE0\x01\xF0"
+DB "\x01\x50\x01\xB0\x1E\xE0\x3F\x00"
+DB "\x3F\xC0\x2F\xC0\x31\x40\x00\x00"
+
+cat_position:;initially lower right corner
+    DW 0xF0F0
+mouse_position: ;upper left corner
+    DW 0x0000
+
+lost_string:
+    DB "Game over"
+    DB 0
+    
+win_string:
+    DB "You won"
+    DB 0
+
+;waits for vsync signal
+wait_next_frame: 	;in C is passed how much to wait
+    MOV A,[vsync]
+    CMP A,0
+    JE wait_next_frame
+    MOV [vsync],0
+    DEC C
+    CMP C,0
+    JE wait_frame_return
+    JMP wait_next_frame
+    wait_frame_return:
+    RET
+    
+
+process_input:
+    MOV A,[keypress]
+    CMP A,0 		;if key is not pressed do nothing
+    JE input_return
+    CALL move_cat	;if its pressed move the cat
+    MOV [keypress],0 	;remove flag
+    MOV [key],0		;save the value of the key
+    input_return:
+    RET
+   
+move_cat: 
+;checks which key is pressed
+    MOV A,[key]
+    MOV B,[cat_position]
+    CMPB AH,'a' 
+    JE left
+    CMPB AH,'s' 
+    JE down
+    CMPB AH,'d' 
+    JE right
+    CMPB AH,'w' 
+    JNE done 		;if its none of the above then do nothing, if its w continue up
+    up:
+    CMPB BL,0 		; has it already reached the top,if yes nothing
+    JE done
+    SUBB BL, 0x10	; rows-1
+    JMP done    
+    left:
+    CMPB BH,0x00	;has it reached the left end of the screen
+    JE done
+    SUBB BH,0x10 	;col-1
+    JMP done
+    down:
+    CMPB BL,0xF0	;has it gone all the way down
+    JE done
+    ADDB BL,0x10	;row+1
+    JMP done
+    right:
+    CMPB BH,0xF0	; has it gone all  the way right
+    JE done
+    ADDB BH,0x10	;col+1
+    JMP done
+    done:
+    ;MOVB [0x1000],AH ;for debugging, does it read correct input
+    MOV [cat_position],B	;change position
+    CALL draw_cat		;draw cat
+    CALL draw_barricade		;draw 3 barricades
+    RET
+    
+ 
+collision:		;collision check
+    MOV B,[cat_position]
+    MOVB DL,BH
+    MOVB DH,BL
+    SHRB DH,4 		;eg: f0->0f
+    CMPB DH,AH		; compares y coordinates
+    JNE break
+    SHRB DL,4 		;eg: f0->0f
+    ADDB DL,DL 		;DL*2
+    ADDB DL,0x20	; compares x coordinates
+    CMPB DL,AL		;if there's not a collision do nothing, if there is pass 0 to register A
+    JNE break
+    MOV A,0 		;collision true
+    break:
+    RET
+ 
+
+replace_ASCII: 		;replaces definitions of ascii codes F0-F6
+    MOV C, tiles
+    MOV D, 0x9E00 	;start of custom tiles vram address
+    load_tiles_loop:
+    CMP D, 0x9F18 	;end of custom tiles vram
+    JE replace_ASCII_ret
+    MOV A, D      	; Set vram address
+    OUT 8           
+    MOV A, [C]    	; load 16-bit word of the data.
+    OUT 9        	; store it to VRAM.
+    ADD C, 2      	; next 16-bit data.
+    ADD D, 2      	; next VRAM address.
+    JMP load_tiles_loop
+    replace_ASCII_ret:
+    RET
+    
+draw_cat:
+    MOV B, draw_cat_colors ;pointer to sprite information.
+    MOV D, 0xA306           ;vram address of sprite 1.
+    MOV C, 3                ;sprites 1-3
+    draw_cat_sprite:
+    CMP C, 0                
+    JE draw_cat_return	    ;if we're done with all sprites, return
+    MOV A, D                ; vram address of tile and color values
+    OUT 8                   
+    MOV A, [B]              ; update the tile and color stored in B
+    OUT 9                   
+    ADD D, 2                ; move to the postion information in the succeeding 2 bytes in vram
+    MOV A, D                
+    OUT 8                   
+    MOV A, [cat_position]  ; get the position from the variable
+    OUT 9                   
+    ADD B, 2                ; information about next sprite
+    ADD D, 2                ; vram address in the next sprite
+    DEC C                   ; next sprite
+    JMP draw_cat_sprite
+    draw_cat_return:
+    RET
+	;tiles and colors of the cat
+    draw_cat_colors:
+    DW 0xF0FF  		;cat body-white  
+    DW 0xF1F3  		;cat ears-pink
+    DW 0xF20E   	;cat eyes-blue
+    
+draw_mouse:
+    MOV B, draw_mouse_colors ;sprite info
+    MOV D, 0xA312           ; vram address of sprite 5
+    MOV C, 3                ;counts sprites
+    draw_mouse_sprite:
+    CMP C, 0               
+    JE draw_mouse_return
+    MOV A, D                ; vram address of tile and color
+    OUT 8                   
+    MOV A, [B]              ; tile and color values
+    OUT 9                   
+    ADD D, 2                ; move to the postion information in the succeeding 2 bytes
+    MOV A, D                
+    OUT 8                   
+    MOV A, [mouse_position]  ;gets position
+    OUT 9                   
+    ADD B, 2                ;next sprite
+    ADD D, 2                ;vram address of next sprite
+    DEC C                   
+    JMP draw_mouse_sprite
+    draw_mouse_return:
+    RET
+    ;tiles and colors of mouse
+    draw_mouse_colors:
+    DW 0xF400   	;mouse outline-black 
+    DW 0xF5F3    	;cat ears-pink
+    DW 0xF6DB   	;cat fill-gray
+ 
+
+draw_barricade:
+    MOV C,3		;generates 3 barricades per cat move
+    loop:
+    CMP C,0
+    JE barricade_return
+    another_number:
+    IN 10		;get random number
+    ;0F-valid rows(0-15) and  3E-valid columns(values between 0 and 64)
+    AND A,0x0F3E 	;gets a valid 16x16 address
+    CMPB AL,0x20 	;futher limits it to columns on the screen (32-64)
+    JB another_number
+   ;is it's in cat's initial position
+    CMP A,0x0F3E 
+    JE another_number
+   ;is it in the mouse's position
+    CMP A,0x0020
+    JE another_number
+    PUSH A		;saves address
+    OUT 8
+    MOV D,A
+    MOV A,0xF3CF	;sets character F3 and color CF for sprite
+    OUT 9
+    DEC C
+    POP A 		;returns address of barricade
+    CALL collision
+    CMP A,0		;is there a collision
+    JE lose_game	;if yes, you lose
+    JMP loop		;if not continue
+    barricade_return:
+    RET
+    lose_game:
+    CALL lost
+    RET
+    
+intro:
+    DB "Welcome to"
+    DB 0
+intro_1:
+    DB "Paws and Pursuit"
+    DB 0
+intro_2:
+    DB " Find the purr-  fect way out    using the a,w,  s,d keys"
+    DB 0
+
+draw_text:;given string in B, color in CL and address in D
+    MOVB CH, [B]        ; gets char in lowerbit, while the higher is the color
+    CMPB CH, 0          ; end of string
+    JE draw_text_return
+    continue:
+    MOV A, D            ; vram address of char
+    OUT 8              
+    MOV A, C            ;char and color
+    OUT 9              
+    INC B               ; next char
+    ADD D, 2            ; next vram address.
+    CMPB DL,32          ;so it wont affect last display
+    JA draw_text
+    CMPB DL,32          ; are we in the 16th column
+    JB draw_text		;if we're bellow continue
+    ADD D,224           ;else we skip the lines
+    JMP draw_text
+draw_text_return:
+    RET
+
+print_intro:
+    MOV B, intro
+    MOV C,0xCF		;color of string
+    MOV D,0x0106 	;address
+    CALL draw_text 
+    MOV B,intro_1
+    MOV D,0x0200	;address
+    CALL draw_text
+    MOV B, intro_2
+    MOV D, 0x0400	;address
+    CALL draw_text
+    RET
+
+scroll_event:;horisontal scroll
+move_frame_loop:
+    MOV C,1				;how much to wait for next frame
+    CMP D,B				;until next frame
+    JE break_move_frame
+    MOV A,0xA302			; horizontal scroll info
+    OUT 8
+    CALL wait_next_frame 		;waits a bit
+    MOV A,D 				;scrolls by the amount of pixels in D
+    OUT 9
+    ADD D,2
+    JMP move_frame_loop
+    break_move_frame:
+    RET
+   
+
+lost:
+    MOV B,514		;to where to scroll
+    MOV D,256		;from what position to scroll
+    MOV A,4		;deactivates keyboard interrupts
+    OUT 0
+    CALL scroll_event
+    
+    MOV B, lost_string			;string
+    MOV C,0xCF 				;color
+    MOV D, 0x0748 			;address
+    CALL draw_text
+    CLI 				;disables interrupts
+    HLT					;ends program
+
+win:
+    MOV B,514		;to what pixel to scroll
+    MOV D,256		;from what pixel to scroll
+    MOV A,4		;deactivate keyboard interrupts
+    OUT 0
+    CALL scroll_event
+    
+    MOV B, win_string		;string
+    MOV C,0xCF 			;color
+    MOV D,0x0748 		;address
+    CALL draw_text
+    CLI  			;clears interrupts
+    RET
+
+main:
+    MOV SP, 0x0FFF		;stack pointer
+    ;text mode
+    MOV A,1
+    OUT 7
+    MOV A,0xA300		;background color info
+    OUT 8
+    MOV A,1			;dark blue color
+    OUT 9
+    
+    MOV A, 5			;enable keyboard and vsync interrupts
+    OUT 0
+    STI				;set interrupts
+    CALL print_intro		;prints starting info
+
+    MOV C,120			;wait for a bit before scrolling
+    CALL wait_next_frame
+
+   ;moves to next frame
+   MOV D,0 
+   MOV B,256
+   CALL scroll_event;horizontal scroll
+    
+    CALL replace_ASCII
+    CALL draw_mouse
+    CALL draw_cat
+game:
+    MOV A, [cat_position]
+    MOV B, [mouse_position]
+    CMP A,B
+    JE end_game
+    CALL process_input
+    JMP game
+end_game:
+CALL win
+HLT
